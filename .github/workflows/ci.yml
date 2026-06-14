@@ -1,0 +1,72 @@
+# =============================================================================
+# ZenGate AI — Continuous Integration (CI) Workflow
+# =============================================================================
+name: Go CI/CD Pipeline
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  # --- Stage 1: Build & Unit Test ---
+  test:
+    name: Build & Test (Go)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Verify Go Formatting
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "Go code is not formatted properly. Please run 'make fmt'"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: Run Go Vet
+        run: go vet ./...
+
+      - name: Run Unit Tests
+        run: go test ./... -v -coverprofile=coverage.out -race
+
+      - name: Verify Go Build
+        run: go build -v -ldflags="-s -w" -o bin/zengate ./cmd/gateway
+
+      - name: Upload Test Coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-coverage
+          path: coverage.out
+
+  # --- Stage 2: Docker Build Verification ---
+  docker:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: actions/setup-buildx-action@v3
+
+      - name: Build Docker Image (Local Check)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          tags: zengate:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
