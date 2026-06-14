@@ -39,6 +39,9 @@ type Config struct {
 	// etcd (Phase 2 — placeholder)
 	EtcdEndpoints []string
 
+	// JWT Configuration
+	JWTSecret string
+
 	// AI Brain (Phase 3 — placeholders)
 	AIEnabled         bool
 	DeepSeekAPIKey    string
@@ -69,6 +72,7 @@ func Load() (*Config, error) {
 		RedisURL:         getEnvOrDefault("ZENGATE_REDIS_URL", "redis://localhost:6379"),
 
 		EtcdEndpoints: getEnvOrDefaultSlice("ZENGATE_ETCD_ENDPOINTS", []string{"localhost:2379"}),
+		JWTSecret:     getEnvOrDefault("ZENGATE_JWT_SECRET", "zengate-default-jwt-secret-key-change-in-production"),
 
 		AIEnabled:       getEnvOrDefaultBool("ZENGATE_AI_ENABLED", false),
 		DeepSeekAPIKey:  getEnvOrDefault("DEEPSEEK_API_KEY", ""),

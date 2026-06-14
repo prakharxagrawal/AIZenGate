@@ -8,11 +8,16 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/redis/go-redis/v9"
+	"github.com/zengate-ai/zengate/internal/auth"
 	"github.com/zengate-ai/zengate/internal/config"
+	"github.com/zengate-ai/zengate/internal/controlplane"
 	"github.com/zengate-ai/zengate/internal/health"
 	"github.com/zengate-ai/zengate/internal/metrics"
 	"github.com/zengate-ai/zengate/internal/proxy"
+	"github.com/zengate-ai/zengate/internal/ratelimit"
 )
 
 func main() {
@@ -35,6 +40,49 @@ func main() {
 		"upstream", cfg.UpstreamURL,
 	)
 
+	// Initialize etcd configuration client (Control Plane)
+	cpClient, err := controlplane.NewClient(cfg.EtcdEndpoints, 5*time.Second)
+	if err != nil {
+		slog.Error("failed to create etcd client", "error", err)
+		os.Exit(1)
+	}
+	defer cpClient.Close()
+
+	// Start configuration watcher (handles hot reloads)
+	if err := cpClient.Start(context.Background()); err != nil {
+		slog.Warn("failed to connect to etcd cluster, dynamic configuration disabled (will use baseline fallbacks)", "endpoints", cfg.EtcdEndpoints, "error", err)
+	}
+
+	// Initialize rate limiter (Redis sliding-window with in-memory Token Bucket fallback)
+	var limiter ratelimit.Limiter
+	if cfg.RateLimitEnabled {
+		opt, err := redis.ParseURL(cfg.RedisURL)
+		if err != nil {
+			slog.Error("failed to parse Redis URL", "url", cfg.RedisURL, "error", err)
+			os.Exit(1)
+		}
+		rdb := redis.NewClient(opt)
+
+		// Ping redis to check connectivity
+		pingCtx, pingCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if err := rdb.Ping(pingCtx).Err(); err != nil {
+			slog.Warn("failed to connect to Redis, falling back to local in-memory rate limiting", "url", cfg.RedisURL, "error", err)
+			limiter = ratelimit.NewTokenBucketLimiter(10.0, 20.0) // 10 req/s refill, 20 capacity
+		} else {
+			slog.Info("connected to Redis for sliding window rate limiting", "url", cfg.RedisURL)
+			redisLimiter, err := ratelimit.NewRedisSlidingWindowLimiter(rdb)
+			if err != nil {
+				slog.Error("failed to initialize Redis rate limiter script", "error", err)
+				os.Exit(1)
+			}
+			limiter = redisLimiter
+		}
+		pingCancel()
+	} else {
+		slog.Info("distributed rate limiting disabled, using local in-memory token bucket")
+		limiter = ratelimit.NewTokenBucketLimiter(10.0, 20.0)
+	}
+
 	// Create the main HTTP mux
 	mux := http.NewServeMux()
 
@@ -47,6 +95,10 @@ func main() {
 	metricsHandler := metrics.NewHandler()
 	mux.HandleFunc("GET /metrics", metricsHandler.ServeHTTP)
 
+	// Control Plane API endpoints
+	cpHandler := controlplane.NewHandler(cpClient)
+	mux.Handle("/api/v1/policies", cpHandler)
+
 	// Reverse proxy — catch-all for all other routes
 	proxyHandler, err := proxy.NewHandler(cfg, metricsHandler)
 	if err != nil {
@@ -56,12 +108,17 @@ func main() {
 	mux.Handle("/", proxyHandler)
 
 	// Build the middleware chain
+	authMiddleware := auth.NewJWTMiddleware(cfg.JWTSecret)
+	rateLimitMiddleware := ratelimit.NewRateLimitMiddleware(limiter, cpClient, metricsHandler)
+
 	handler := proxy.Chain(
 		mux,
 		proxy.RecoveryMiddleware(logger),
 		proxy.RequestIDMiddleware(),
 		proxy.LoggingMiddleware(logger),
 		proxy.CORSMiddleware(cfg),
+		authMiddleware.Handler,
+		rateLimitMiddleware.Handler,
 		proxy.MetricsMiddleware(metricsHandler),
 	)
 

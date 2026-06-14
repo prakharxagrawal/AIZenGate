@@ -58,3 +58,45 @@ This document serves as the persistent, detailed technical record of all compone
     - **Tester:** Invokes tests and linter tasks.
     - **DocWriter:** Generates markdown documentation.
   - Centralizes provider configurations in `adk/config.py` including token configurations and endpoint settings for DeepSeek V4 Flash Free and Gemini.
+
+---
+
+## ⚡ Phase 2 — Core Engine
+
+### 1. Dynamic Configuration Store (etcd client & watcher)
+- **Package Path:** `internal/controlplane`
+- **Implementation Date:** 2026-06-14
+- **Details:**
+  - Connects to etcd endpoints using official `go.etcd.io/etcd/client/v3`.
+  - Implements a background Watcher on the `/zengate/policies/` prefix to intercept write/delete events.
+  - Policy changes dynamically update an in-memory thread-safe `sync.Map` cache.
+  - Matches paths, methods, and client tiers dynamically (`GetMatchingPolicy`).
+  - Fallback logic to local default policies if etcd is unavailable or no custom policy is matches.
+
+### 2. Control Plane HTTP Admin API
+- **Package Path:** `internal/controlplane`
+- **Implementation Date:** 2026-06-14
+- **Details:**
+  - Implements administrative CRUD routes:
+    - `POST /api/v1/policies`: Creates/saves a policy configuration JSON directly to etcd.
+    - `GET /api/v1/policies`: Lists all active policies currently configured in etcd.
+    - `DELETE /api/v1/policies?id=<id>`: Removes policy key mapping in etcd.
+
+### 3. Core Rate Limiting Subsystem
+- **Package Path:** `internal/ratelimit`
+- **Implementation Date:** 2026-06-14
+- **Details:**
+  - Defines the core `Limiter` interface.
+  - Implements `TokenBucketLimiter` for local in-memory fallback rate limiting (calculates tokens based on time elapsed).
+  - Implements `RedisSlidingWindowLimiter` for distributed sliding window log limits.
+  - Loaded custom Lua script `scripts/sliding_window.lua` into Redis via script load (atomic clean older entries, count active, insert uniqueness score, and refresh expire TTL).
+
+### 4. JWT Authentication Middleware
+- **Package Path:** `internal/auth`
+- **Implementation Date:** 2026-06-14
+- **Details:**
+  - Uses `github.com/golang-jwt/jwt/v5` to validate incoming requests.
+  - Extracts JWT token from the `Authorization: Bearer <token>` header.
+  - Injects `client_id` and `client_tier` context properties into the request pipeline.
+  - Defaults missing tokens to `anonymous` identity and tier. Reject expired or corrupt signatures with `401 Unauthorized`.
+
