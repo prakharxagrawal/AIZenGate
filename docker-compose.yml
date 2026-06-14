@@ -17,6 +17,9 @@ services:
       ZENGATE_UPSTREAM_URL: "http://echo:9090"
       ZENGATE_RATELIMIT_ENABLED: "false"
       ZENGATE_REDIS_URL: "redis://redis:6379"
+      ZENGATE_AI_ENABLED: "true"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
     depends_on:
       - echo
       - redis
