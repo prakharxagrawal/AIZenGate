@@ -23,11 +23,12 @@ type Policy struct {
 
 // Client manages connection to the etcd cluster and hot reloads policies.
 type Client struct {
-	cli        *clientv3.Client
-	policies   sync.Map // key: policyID -> Policy
-	prefix     string
-	shutdownCh chan struct{}
-	wg         sync.WaitGroup
+	cli              *clientv3.Client
+	policies         sync.Map // key: policyID -> Policy
+	prefix           string
+	shutdownCh       chan struct{}
+	wg               sync.WaitGroup
+	onUpstreamUpdate func(string)
 }
 
 // NewClient creates a new etcd configuration client.
@@ -51,6 +52,10 @@ func NewClient(endpoints []string, timeout time.Duration) (*Client, error) {
 
 // Start loads initial policies and starts the background etcd watch loop.
 func (c *Client) Start(ctx context.Context) error {
+	if c.cli == nil {
+		slog.Warn("etcd client is nil, dynamic configuration watcher is disabled (using in-memory mode)")
+		return nil
+	}
 	slog.Info("loading initial configuration from etcd", "prefix", c.prefix)
 
 	// Fetch all existing policies
@@ -76,6 +81,9 @@ func (c *Client) Start(ctx context.Context) error {
 func (c *Client) Close() error {
 	close(c.shutdownCh)
 	c.wg.Wait()
+	if c.cli == nil {
+		return nil
+	}
 	return c.cli.Close()
 }
 
@@ -86,6 +94,34 @@ func (c *Client) GetPolicy(id string) (Policy, bool) {
 		return Policy{}, false
 	}
 	return val.(Policy), true
+}
+
+// AddPolicyToCache adds or updates a policy in the local memory cache.
+func (c *Client) AddPolicyToCache(p Policy) {
+	c.policies.Store(p.ID, p)
+	slog.Info("policy cache updated manually (cache-only)", "id", p.ID, "path", p.Path, "limit", p.Limit)
+}
+
+// GetAllPolicies returns a slice of all policies stored in the local memory cache.
+func (c *Client) GetAllPolicies() []Policy {
+	policies := make([]Policy, 0)
+	c.policies.Range(func(key, value interface{}) bool {
+		policies = append(policies, value.(Policy))
+		return true
+	})
+	return policies
+}
+
+// SetUpstreamUpdateCallback registers a callback to invoke when upstream is updated (used for cache-only/mock testing).
+func (c *Client) SetUpstreamUpdateCallback(cb func(string)) {
+	c.onUpstreamUpdate = cb
+}
+
+// UpdateUpstream triggers the local dynamic upstream target updater callback.
+func (c *Client) UpdateUpstream(newTarget string) {
+	if c.onUpstreamUpdate != nil {
+		c.onUpstreamUpdate(newTarget)
+	}
 }
 
 // GetMatchingPolicy finds a policy matching the incoming request parameters (path, method, tier).
@@ -130,6 +166,10 @@ func (c *Client) Prefix() string {
 
 func (c *Client) watchLoop() {
 	defer c.wg.Done()
+
+	if c.cli == nil {
+		return
+	}
 
 	watchChan := c.cli.Watch(context.Background(), c.prefix, clientv3.WithPrefix())
 	slog.Info("started configuration watcher loop", "prefix", c.prefix)

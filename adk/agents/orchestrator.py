@@ -29,6 +29,7 @@ from config import (
     get_llm_chain,
     get_pipeline_config,
     PipelineConfig,
+    run_agent_async,
 )
 
 console = Console()
@@ -100,40 +101,45 @@ class PipelineState:
 # --- Agent Executor (Stub) ---
 
 async def execute_agent(agent_name: str, task: str, context: dict) -> TaskResult:
-    """
-    Execute a single agent with the given task and context.
+	"""
+	Execute a single agent with the given task and context.
+	Uses Google ADK's Agent model connection via run_agent_async.
+	"""
+	agent_config = AGENTS.get(agent_name)
+	if not agent_config:
+		return TaskResult(
+			agent_name=agent_name,
+			status=TaskStatus.FAILED,
+			error=f"Unknown agent: {agent_name}",
+		)
 
-    Phase 1: This is a stub that simulates agent execution.
-    Phase 2+: Will integrate with Google ADK's Agent class and LLM calls.
-    """
-    agent_config = AGENTS.get(agent_name)
-    if not agent_config:
-        return TaskResult(
-            agent_name=agent_name,
-            status=TaskStatus.FAILED,
-            error=f"Unknown agent: {agent_name}",
-        )
+	start = time.time()
 
-    start = time.time()
+	console.print(f"\n[bold blue]▶ Running {agent_config.name} Agent...[/bold blue]")
+	console.print(f"  Task: {task[:100]}...")
 
-    console.print(f"\n[bold blue]▶ Running {agent_config.name} Agent...[/bold blue]")
-    console.print(f"  Task: {task[:100]}...")
-
-    # TODO: Replace with actual ADK agent execution
-    # This stub simulates successful execution
-    await asyncio.sleep(0.5)  # Simulate LLM call latency
-
-    duration = time.time() - start
-
-    result = TaskResult(
-        agent_name=agent_name,
-        status=TaskStatus.COMPLETED,
-        output=f"[Stub] {agent_config.name} completed task: {task[:50]}...",
-        duration_seconds=duration,
-    )
-
-    console.print(f"  [green]✓ {agent_config.name} completed in {duration:.1f}s[/green]")
-    return result
+	try:
+		# Execute the agent query asynchronously using the configured models
+		output = await run_agent_async(agent_name, task, context)
+		
+		duration = time.time() - start
+		console.print(f"  [green]✓ {agent_config.name} completed in {duration:.1f}s[/green]")
+		
+		return TaskResult(
+			agent_name=agent_name,
+			status=TaskStatus.COMPLETED,
+			output=output,
+			duration_seconds=duration,
+		)
+	except Exception as e:
+		duration = time.time() - start
+		console.print(f"  [red]✗ {agent_config.name} failed: {e}[/red]")
+		return TaskResult(
+			agent_name=agent_name,
+			status=TaskStatus.FAILED,
+			error=str(e),
+			duration_seconds=duration,
+		)
 
 
 # --- DAG Pipeline ---

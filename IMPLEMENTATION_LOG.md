@@ -100,3 +100,52 @@ This document serves as the persistent, detailed technical record of all compone
   - Injects `client_id` and `client_tier` context properties into the request pipeline.
   - Defaults missing tokens to `anonymous` identity and tier. Reject expired or corrupt signatures with `401 Unauthorized`.
 
+---
+
+## 🧠 Phase 3 — AI Brain & Embedded Agents
+
+### 1. Google ADK Development Pipeline (Python)
+- **Package Path:** `adk/`
+- **Implementation Date:** 2026-06-14
+- **Details:**
+  - Configured model instantiations in `adk/config.py` using `LiteLlm` (OpenAI compatible DeepSeek V4 Flash) and `Gemini` (native Google model) with custom fallback selection.
+  - Implemented async agent execution runner `run_agent_async` in `adk/config.py` utilizing Google ADK `Agent`, `Runner`, and `InMemorySessionService` to process model iterations.
+  - Modified `adk/agents/orchestrator.py` to route agent tasks through the real Google ADK runner pipeline.
+
+### 2. Runtime AI Brain Client (Go)
+- **Package Path:** `internal/ai`
+- **Implementation Date:** 2026-06-14
+- **Details:**
+  - Implemented native Go AI client client `Brain` in `internal/ai/brain.go` querying primary DeepSeek API and falling back to Gemini API via HTTPS.
+  - Implements a local developer-friendly **Mock Mode** when no API credentials are configured, returning deterministic JSON mock completions based on prompt pattern matching.
+
+### 3. Natural Language Config Translator
+- **Package Path:** `internal/ai`
+- **Implementation Date:** 2026-06-14
+- **Details:**
+  - Implemented HTTP administrative handler `TranslatorHandler` in `internal/ai/translator.go` exposed at `POST /api/v1/policies/translate`.
+  - Translates natural language prompts to structured JSON policies, automatically saving them in etcd or local configuration cache when etcd is disabled.
+
+### 4. Background Traffic Analyzer Agent
+- **Package Path:** `internal/ai`
+- **Implementation Date:** 2026-06-14
+- **Details:**
+  - Implemented background worker `TrafficAnalyzer` in `internal/ai/analyzer.go` measuring traffic throughput and calculating standard deviation anomalies.
+  - Spike detections exceeding 3-sigma and > 5.0 TPS trigger AI evaluation to scale active rate limit thresholds dynamically in etcd or local cache.
+
+### 5. Background Self-Healing Routing Agent
+- **Package Path:** `internal/ai`
+- **Implementation Date:** 2026-06-14
+- **Details:**
+  - Implemented background worker `SelfHealer` in `internal/ai/healer.go` auditing HTTP upstream connection statuses.
+  - Connection failure rates exceeding 5% in the analysis window trigger AI evaluation to determine a healthy backup route target.
+  - Target updates are dynamically propagated to the gateway proxy via etcd updates or direct local callbacks when etcd is disabled.
+
+### 6. Dynamic Upstream Proxy Updater
+- **Package Path:** `internal/proxy`
+- **Implementation Date:** 2026-06-14
+- **Details:**
+  - Added thread-safe proxy target updater method `UpdateTarget` to `internal/proxy/Handler`.
+  - Dynamically rewrites request targets, hosts, and forwarding parameters during upstream failovers.
+
+

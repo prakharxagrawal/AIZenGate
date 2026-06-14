@@ -7,6 +7,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zengate-ai/zengate/internal/config"
@@ -16,6 +17,7 @@ import (
 // Handler wraps httputil.ReverseProxy with ZenGate-specific logic:
 // request ID injection, upstream latency tracking, and error handling.
 type Handler struct {
+	mu      sync.RWMutex
 	proxy   *httputil.ReverseProxy
 	target  *url.URL
 	metrics *metrics.Handler
@@ -103,11 +105,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Set proxy start time for latency tracking
 	r.Header.Set("X-Zengate-Proxy-Start", time.Now().Format(time.RFC3339Nano))
 
+	h.mu.RLock()
+	targetStr := h.target.String()
+	h.mu.RUnlock()
+
 	slog.Debug("proxying request",
 		"request_id", r.Header.Get("X-Request-Id"),
 		"method", r.Method,
 		"path", r.URL.Path,
-		"upstream", h.target.String(),
+		"upstream", targetStr,
 	)
 
 	h.proxy.ServeHTTP(w, r)
@@ -123,4 +129,24 @@ func isInternalPath(path string) bool {
 		}
 	}
 	return false
+}
+
+// UpdateTarget thread-safely updates the proxy target destination dynamically.
+func (h *Handler) UpdateTarget(newTarget *url.URL) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.target = newTarget
+	h.proxy.Director = func(req *http.Request) {
+		req.URL.Scheme = newTarget.Scheme
+		req.URL.Host = newTarget.Host
+		req.Host = newTarget.Host
+
+		if clientIP := req.Header.Get("X-Forwarded-For"); clientIP == "" {
+			req.Header.Set("X-Forwarded-For", req.RemoteAddr)
+		}
+		req.Header.Set("X-Forwarded-By", "ZenGate/dynamic")
+	}
+
+	slog.Warn("gateway reverse proxy target updated dynamically by Self-Healer", "new_target", newTarget.String())
 }

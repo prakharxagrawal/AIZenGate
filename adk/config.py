@@ -12,6 +12,9 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
+from google.adk.models import Gemini
+from google.adk.models.lite_llm import LiteLlm
+
 
 @dataclass
 class LLMConfig:
@@ -82,6 +85,32 @@ def get_llm_chain() -> list[LLMConfig]:
         )
 
     return chain
+
+
+def get_adk_model(preference: str = "primary"):
+    """Returns the Google ADK model object based on credentials and preferences."""
+    primary = get_primary_llm()
+    fallback = get_fallback_llm()
+
+    # Determine if we should use primary or fallback
+    if preference == "primary" and primary.is_available:
+        # Use LiteLlm for OpenAI compatible custom API
+        # LiteLlm requires the format "openai/<model_id>" for custom endpoints
+        return LiteLlm(
+            model=f"openai/{primary.model_id}",
+            base_url=primary.base_url,
+            api_key=primary.api_key,
+            temperature=primary.temperature,
+            max_tokens=primary.max_tokens,
+        )
+    
+    # Fallback: Native Gemini model
+    if fallback.is_available:
+        os.environ["GEMINI_API_KEY"] = fallback.api_key
+        return Gemini(model=fallback.model_id)
+    
+    # Fallback to default Gemini if no credentials but we run anyway
+    return Gemini(model="gemini-2.0-flash")
 
 
 # --- Agent Definitions ---
@@ -205,3 +234,55 @@ def get_pipeline_config() -> PipelineConfig:
         human_in_the_loop=os.getenv("ADK_HUMAN_IN_LOOP", "true").lower() == "true",
         parallel_codegen=os.getenv("ADK_PARALLEL_CODEGEN", "true").lower() == "true",
     )
+
+
+async def run_agent_async(agent_name: str, prompt: str, context: Optional[dict] = None) -> str:
+    """Executes a single ADK agent query asynchronously."""
+    import json
+    from google.adk import Agent, Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.genai import types
+
+    agent_config = AGENTS.get(agent_name)
+    if not agent_config:
+        raise ValueError(f"Unknown agent: {agent_name}")
+
+    # Build the system instruction from system prompt and optional context
+    instruction = agent_config.system_prompt
+    if context:
+        instruction += "\n\nContext:\n" + json.dumps(context, indent=2)
+
+    # Initialize the ADK model connection
+    model_obj = get_adk_model(agent_config.llm_preference)
+
+    # Construct the agent
+    agent = Agent(
+        name=agent_config.name,
+        model=model_obj,
+        instruction=instruction,
+    )
+
+    # Setup runner and session
+    session_service = InMemorySessionService()
+    runner = Runner(
+        agent=agent,
+        app_name="zengate_adk",
+        session_service=session_service,
+        auto_create_session=True
+    )
+
+    # Execute the request
+    content = types.Content(role="user", parts=[types.Part(text=prompt)])
+    response_text = ""
+
+    async for event in runner.run_async(
+        user_id="dev_user",
+        session_id="dev_session",
+        new_message=content
+    ):
+        if event.is_final_response() and event.content:
+            parts = event.content.parts
+            if parts:
+                response_text = "".join([p.text for p in parts if p.text])
+
+    return response_text

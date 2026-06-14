@@ -41,12 +41,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // listPolicies retrieves all policies stored in etcd.
 func (h *Handler) listPolicies(w http.ResponseWriter, r *http.Request) {
+	cli := h.client.GetEtcdClient()
+	if cli == nil {
+		policies := make([]Policy, 0)
+		h.client.policies.Range(func(key, value interface{}) bool {
+			policies = append(policies, value.(Policy))
+			return true
+		})
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(policies)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	cli := h.client.GetEtcdClient()
 	prefix := h.client.Prefix()
-
 	resp, err := cli.Get(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
 		slog.Error("failed to query policies from etcd", "error", err)
@@ -90,6 +100,14 @@ func (h *Handler) savePolicy(w http.ResponseWriter, r *http.Request) {
 		p.Tier = "*"
 	}
 
+	cli := h.client.GetEtcdClient()
+	if cli == nil {
+		h.client.policies.Store(p.ID, p)
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "saved", "id": p.ID})
+		return
+	}
+
 	payload, err := json.Marshal(p)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -100,7 +118,6 @@ func (h *Handler) savePolicy(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	cli := h.client.GetEtcdClient()
 	key := h.client.Prefix() + p.ID
 
 	_, err = cli.Put(ctx, key, string(payload))
@@ -124,10 +141,23 @@ func (h *Handler) deletePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cli := h.client.GetEtcdClient()
+	if cli == nil {
+		_, ok := h.client.GetPolicy(policyID)
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"error": "policy_not_found"})
+			return
+		}
+		h.client.policies.Delete(policyID)
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "deleted", "id": policyID})
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	cli := h.client.GetEtcdClient()
 	key := h.client.Prefix() + policyID
 
 	// Delete from etcd

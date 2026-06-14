@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"github.com/zengate-ai/zengate/internal/ai"
 	"github.com/zengate-ai/zengate/internal/auth"
 	"github.com/zengate-ai/zengate/internal/config"
 	"github.com/zengate-ai/zengate/internal/controlplane"
@@ -83,6 +86,9 @@ func main() {
 		limiter = ratelimit.NewTokenBucketLimiter(10.0, 20.0)
 	}
 
+	// Create Go AI Brain
+	brain := ai.NewBrain(cfg)
+
 	// Create the main HTTP mux
 	mux := http.NewServeMux()
 
@@ -99,6 +105,10 @@ func main() {
 	cpHandler := controlplane.NewHandler(cpClient)
 	mux.Handle("/api/v1/policies", cpHandler)
 
+	// Config Translator endpoint
+	translatorHandler := ai.NewTranslatorHandler(brain, cpClient)
+	mux.Handle("/api/v1/policies/translate", translatorHandler)
+
 	// Reverse proxy — catch-all for all other routes
 	proxyHandler, err := proxy.NewHandler(cfg, metricsHandler)
 	if err != nil {
@@ -106,6 +116,54 @@ func main() {
 		os.Exit(1)
 	}
 	mux.Handle("/", proxyHandler)
+
+	// Background loop to watch for dynamic upstream updates from Self-Healer
+	go func() {
+		cli := cpClient.GetEtcdClient()
+		if cli == nil {
+			slog.Info("etcd client is nil, setting up in-memory updater for upstream target updates")
+			cpClient.SetUpstreamUpdateCallback(func(newTargetStr string) {
+				newTarget, err := url.Parse(newTargetStr)
+				if err != nil {
+					slog.Error("failed to parse updated upstream URL from local callback", "url", newTargetStr, "error", err)
+					return
+				}
+				proxyHandler.UpdateTarget(newTarget)
+			})
+			return
+		}
+
+		watchChan := cli.Watch(context.Background(), "/zengate/upstream")
+		slog.Info("started upstream target configuration watcher", "key", "/zengate/upstream")
+
+		for wresp := range watchChan {
+			for _, ev := range wresp.Events {
+				if ev.Type == clientv3.EventTypePut {
+					newTargetStr := string(ev.Kv.Value)
+					newTarget, err := url.Parse(newTargetStr)
+					if err != nil {
+						slog.Error("failed to parse updated upstream URL from etcd", "url", newTargetStr, "error", err)
+						continue
+					}
+					proxyHandler.UpdateTarget(newTarget)
+				}
+			}
+		}
+	}()
+
+	// Start background micro-agents if enabled
+	var analyzer *ai.TrafficAnalyzer
+	var healer *ai.SelfHealer
+
+	if cfg.AIEnabled {
+		slog.Info("AI features enabled, starting background micro-agents")
+
+		analyzer = ai.NewTrafficAnalyzer(brain, cpClient, metricsHandler, 10*time.Second)
+		analyzer.Start()
+
+		healer = ai.NewSelfHealer(brain, cpClient, metricsHandler, 5*time.Second, 5.0)
+		healer.Start()
+	}
 
 	// Build the middleware chain
 	authMiddleware := auth.NewJWTMiddleware(cfg.JWTSecret)
@@ -154,6 +212,15 @@ func main() {
 
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
+
+		if analyzer != nil {
+			slog.Info("stopping background traffic analyzer agent")
+			analyzer.Stop()
+		}
+		if healer != nil {
+			slog.Info("stopping background self-healing agent")
+			healer.Stop()
+		}
 
 		slog.Info("draining connections", "timeout", cfg.ShutdownTimeout)
 		if err := server.Shutdown(ctx); err != nil {
