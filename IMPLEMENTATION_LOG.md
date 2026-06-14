@@ -148,4 +148,42 @@ This document serves as the persistent, detailed technical record of all compone
   - Added thread-safe proxy target updater method `UpdateTarget` to `internal/proxy/Handler`.
   - Dynamically rewrites request targets, hosts, and forwarding parameters during upstream failovers.
 
+---
+
+## 🛡️ Phase 4 — Hardening, Deployment & Observability
+
+### 1. Grafana Datasource & Dashboard Provisioning
+- **Package Path:** `deploy/grafana/provisioning/`
+- **Implementation Date:** 2026-06-14
+- **Details:**
+  - Configured automated Grafana provisioning of datasources (`datasource.yml`) mapping Prometheus to Grafana automatically on boot.
+  - Configured automated Grafana provisioning of dashboards (`dashboard.yml`) scanning json files.
+  - Volume mapped these provisioning directories in `docker-compose.yml` to ensure instantaneous dashboard initialization.
+
+### 2. ZenGate Metrics Dashboard definition
+- **Package Path:** `deploy/grafana/dashboards/`
+- **Implementation Date:** 2026-06-14
+- **Details:**
+  - Created pre-configured dashboard config `zengate.json` visualizing:
+    - Overall gateway throughput (TPS)
+    - Blocked requests count (429 HTTP rate limiting responses)
+    - Success and error rate proportions (2xx, 4xx, 5xx)
+    - Tail latency profiles (P99, P95, and P50) and upstream latency
+    - Per-path API traffic counts
+
+### 3. Load Testing Scripts
+- **Package Path:** `k6/`
+- **Implementation Date:** 2026-06-14
+- **Details:**
+  - Created a performance check script `load_test.js` using the k6 framework.
+  - Simulates ramp-up/ramp-down concurrency profiles of up to 20 virtual users.
+  - Distributes requests using pre-signed JWT mock tokens (simulating premium and basic tier requests) alongside anonymous profile request flows.
+
+### 4. Deployment Runbooks
+- **Package Path:** `docs/`
+- **Implementation Date:** 2026-06-14
+- **Details:**
+  - Written detailed guide `deployment.md` for Cloudflare Tunnel setups (`cloudflared` services configurations) and VMs networking security rules.
+
+
 
