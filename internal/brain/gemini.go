@@ -1,14 +1,18 @@
-// Package brain provides interfaces and implementations for LLM-based decision making.
+// Package brain provides the interface and implementation for LLM-based decision making
+// within the ZenGate AI self-healing infrastructure.
 package brain
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
 )
+
+const DefaultModel = "gemini-1.5-flash"
 
 // ModelProvider defines the contract for interacting with LLM backends.
 type ModelProvider interface {
@@ -22,7 +26,8 @@ type GeminiClient struct {
 }
 
 // NewGeminiClient initializes a new Gemini client with the specified model.
-func NewGeminiClient(ctx context.Context, apiKey, modelName string) (*GeminiClient, error) {
+func NewGeminiClient(ctx context.Context, apiKey string) (*GeminiClient, error) {
+	modelName := os.Getenv("GEMINI_MODEL")
 	if modelName == "" {
 		modelName = DefaultModel
 	}
@@ -38,7 +43,7 @@ func NewGeminiClient(ctx context.Context, apiKey, modelName string) (*GeminiClie
 	}, nil
 }
 
-// GenerateContent sends a prompt to the Gemini API and returns the response.
+// GenerateContent sends a prompt to the configured Gemini model and returns the response.
 func (g *GeminiClient) GenerateContent(ctx context.Context, prompt string) (string, error) {
 	model := g.client.GenerativeModel(g.modelName)
 
