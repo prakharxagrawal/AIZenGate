@@ -1,5 +1,5 @@
-// Package brain provides interfaces and implementations for LLM-based decision making.
+// Package brain provides the core AI agent logic and model integration.
 package brain
 
-// DefaultModel is the stable, high-performance model supported by the free tier.
+// DefaultModel defines the fallback AI model used by the system.
 const DefaultModel = "gemini-1.5-flash"

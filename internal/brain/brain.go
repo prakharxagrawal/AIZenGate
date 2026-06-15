@@ -1,27 +1,35 @@
-// Package brain handles the orchestration of AI-driven self-healing logic.
+// Package brain manages the orchestration of AI tasks.
 package brain
 
 import (
 	"context"
 	"fmt"
+	"log/slog"
 )
 
-// SelfHealer orchestrates the diagnostic and repair process.
-type SelfHealer struct {
-	llm LLMClient
+// Coordinator manages task execution flow.
+type Coordinator struct {
+	processor TaskProcessor
+	logger    *slog.Logger
 }
 
-// NewSelfHealer creates a new instance of the self-healer with the provided LLM client.
-func NewSelfHealer(llm LLMClient) *SelfHealer {
-	return &SelfHealer{llm: llm}
-}
-
-// DiagnoseAndRepair processes logs and returns a repair plan.
-func (s *SelfHealer) DiagnoseAndRepair(ctx context.Context, logs string) (string, error) {
-	prompt := fmt.Sprintf("Analyze these logs and provide a repair plan: %s", logs)
-	plan, err := s.llm.GenerateContent(ctx, prompt)
-	if err != nil {
-		return "", fmt.Errorf("self-healer failed to generate plan: %w", err)
+// NewCoordinator creates a new task coordinator.
+func NewCoordinator(p TaskProcessor, l *slog.Logger) *Coordinator {
+	return &Coordinator{
+		processor: p,
+		logger:    l,
 	}
-	return plan, nil
+}
+
+// ProcessTask handles the orchestration of a single task.
+func (c *Coordinator) ProcessTask(ctx context.Context, task TaskPayload) (Result, error) {
+	c.logger.Info("processing task", "agent_id", task.AgentID)
+
+	res, err := c.processor.Execute(ctx, task)
+	if err != nil {
+		c.logger.Error("failed to execute task", "agent_id", task.AgentID, "error", err)
+		return Result{}, fmt.Errorf("brain: execution failed: %w", err)
+	}
+
+	return res, nil
 }

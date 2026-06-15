@@ -1,22 +1,20 @@
-// Package brain_test verifies the functionality of the brain package.
+// Package brain_test verifies the functionality of the AI brain components.
 package brain_test
 
 import (
-	"context"
+	"log/slog"
+	"os"
 	"testing"
 
-	"github.com/zengate-ai/zengate/internal/brain"
+	"github.com/zengate-ai/zengate/brain"
 )
 
-func TestGeminiClientInitialization(t *testing.T) {
-	ctx := context.Background()
-	// Test that the client can be initialized (mocking API key for structure)
-	client, err := brain.NewGeminiClient(ctx, "test-key")
-	if err != nil {
-		t.Fatalf("expected no error during initialization, got %v", err)
-	}
+func TestNewGeminiClient(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	apiKey := "test-key"
 
+	client := brain.NewGeminiClient(logger, apiKey)
 	if client == nil {
-		t.Fatal("expected client to be initialized")
+		t.Fatal("expected client to be initialized, got nil")
 	}
 }

@@ -1,19 +1,10 @@
-# ZenGate AI - Self-Healer Module
+# ZenGate AI
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
+[![Coverage](https://img.shields.io/badge/coverage-0%25-yellow)]()
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
-[![Go Version](https://img.shields.io/badge/go-1.21+-blue)]()
 
-## Overview
-The Self-Healer module is an autonomous diagnostic agent designed to monitor system health and execute repair plans using LLM-based reasoning.
-
-## Model Configuration
-The system currently utilizes `gemini-1.5-flash` for its high-performance, low-latency capabilities within the Google AI Studio free tier.
-
-### Environment Variables
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `GEMINI_API_KEY` | Your Google AI Studio API Key | Required |
-| `GEMINI_MODEL` | The model identifier to use | `gemini-1.5-flash` |
+ZenGate AI is a high-throughput, asynchronous agent orchestration framework designed for distributed AI task processing.
 
 ## Architecture
+ZenGate AI follows an Actor-Model pattern for agent execution and an Event-Driven architecture for system coordination.

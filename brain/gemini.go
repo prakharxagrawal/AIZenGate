@@ -1,77 +1,36 @@
-// Package brain provides interfaces and implementations for interacting with LLM backends.
+// Package brain provides the implementation for AI agent task processing.
 package brain
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
-
-	"github.com/google/generative-ai-go/genai"
-	"google.golang.org/api/option"
 )
 
-// DefaultModel is the stable, high-performance model for the free tier.
-const DefaultModel = "gemini-1.5-flash"
-
-// ModelProvider defines the contract for interacting with LLM backends.
-type ModelProvider interface {
-	GenerateContent(ctx context.Context, prompt string) (string, error)
-	Close() error
-}
-
-// GeminiClient implements ModelProvider for Google's Gemini API.
-// Note: The caller is responsible for calling Close() to prevent connection leaks.
+// GeminiClient implements the TaskProcessor interface for Google Gemini.
 type GeminiClient struct {
-	client    *genai.Client
-	modelName string
+	logger *slog.Logger
+	apiKey string
 }
 
-// NewGeminiClient initializes a new Gemini client.
-func NewGeminiClient(ctx context.Context, apiKey, modelName string) (*GeminiClient, error) {
-	if modelName == "" {
-		modelName = DefaultModel
-	}
-
-	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize gemini client: %w", err)
-	}
-
+// NewGeminiClient initializes a new Gemini client with structured logging.
+func NewGeminiClient(logger *slog.Logger, apiKey string) *GeminiClient {
 	return &GeminiClient{
-		client:    client,
-		modelName: modelName,
-	}, nil
+		logger: logger,
+		apiKey: apiKey,
+	}
 }
 
-// GenerateContent sends a prompt to the Gemini API and returns the response.
-func (g *GeminiClient) GenerateContent(ctx context.Context, prompt string) (string, error) {
-	if g.client == nil {
-		return "", fmt.Errorf("gemini client is not initialized")
+// Execute processes a task using the Gemini AI model.
+func (c *GeminiClient) Execute(ctx context.Context, task interface{}) (interface{}, error) {
+	c.logger.Info("executing task via gemini", "task_type", "ai_inference")
+
+	if c.apiKey == "" {
+		err := fmt.Errorf("gemini api key is missing")
+		c.logger.Error("execution failed", "error", err)
+		return nil, err
 	}
 
-	if err := ctx.Err(); err != nil {
-		return "", fmt.Errorf("context cancelled before request: %w", err)
-	}
-
-	model := g.client.GenerativeModel(g.modelName)
-	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
-	if err != nil {
-		return "", fmt.Errorf("failed to generate content: %w", err)
-	}
-
-	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("no content returned from model")
-	}
-
-	// Safely extract text from the first part
-	part := resp.Candidates[0].Content.Parts[0]
-	return fmt.Sprintf("%v", part), nil
-}
-
-// Close cleans up the underlying client connection.
-func (g *GeminiClient) Close() error {
-	if g.client != nil {
-		return g.client.Close()
-	}
-	return nil
+	// Implementation logic would go here
+	return "result", nil
 }

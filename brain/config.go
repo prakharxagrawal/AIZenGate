@@ -1,16 +1,24 @@
-// Package brain handles the configuration and initialization of the AI brain components.
+// Package brain handles configuration and initialization logic.
 package brain
 
 import (
-	"os"
+	"errors"
+	"fmt"
 )
 
-// GetModelName retrieves the configured model from environment variables,
-// defaulting to gemini-1.5-flash if not set.
-func GetModelName() string {
-	model := os.Getenv("GEMINI_MODEL")
-	if model == "" {
-		return DefaultModel
+// Config holds the application configuration.
+type Config struct {
+	Model string
+	Port  int
+}
+
+// Validate ensures the configuration is valid for production use.
+func (c *Config) Validate() error {
+	if c.Model == "" {
+		return errors.New("configuration error: Model must be specified")
 	}
-	return model
+	if c.Port <= 0 || c.Port > 65535 {
+		return fmt.Errorf("configuration error: invalid port %d", c.Port)
+	}
+	return nil
 }

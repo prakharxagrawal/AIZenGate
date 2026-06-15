@@ -2,23 +2,26 @@ package brain
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"testing"
 )
 
-func TestNewGeminiClient(t *testing.T) {
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		t.Skip("GEMINI_API_KEY not set, skipping integration test")
+func TestGeminiClient_Execute(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	client := NewGeminiClient(logger, "test-key")
+
+	task := TaskPayload{
+		AgentID: "test-agent",
+		Prompt:  "hello",
 	}
 
-	ctx := context.Background()
-	client, err := NewGeminiClient(ctx, apiKey, DefaultModel)
+	res, err := client.Execute(context.Background(), task)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	if client.modelName != DefaultModel {
-		t.Errorf("expected model %s, got %s", DefaultModel, client.modelName)
+	if res.Content == "" {
+		t.Error("expected content in result")
 	}
 }
