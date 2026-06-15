@@ -14,6 +14,8 @@ Features:
 
 import asyncio
 import json
+import re
+import subprocess
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -31,6 +33,27 @@ from config import (
     PipelineConfig,
     run_agent_async,
 )
+
+def parse_and_write_files(output_text: str, base_dir: Path) -> list[str]:
+    """Parse output text for [FILE: path] sections and write them to disk."""
+    pattern = r'\[FILE:\s*(?P<path>[a-zA-Z0-9_\-\.\/]+)\]\s*\n*```[a-zA-Z0-9]*\n(?P<code>.*?)\n```'
+    matches = list(re.finditer(pattern, output_text, re.DOTALL))
+    
+    files_written = []
+    for m in matches:
+        path_str = m.group('path').strip()
+        code = m.group('code')
+        
+        # Guard against directory traversal
+        if ".." in path_str or path_str.startswith("/") or path_str.startswith("\\"):
+            continue
+            
+        file_path = base_dir / path_str
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(code, encoding='utf-8')
+        files_written.append(path_str)
+        
+    return files_written
 
 console = Console()
 
@@ -166,9 +189,55 @@ class Pipeline:
         self.config = config or get_pipeline_config()
         self.state: Optional[PipelineState] = None
 
+    def _setup_git_branch(self, task: str, workspace_root: Path) -> Optional[str]:
+        """Creates a sanitized git feature branch for this run."""
+        try:
+            # 1. Sanitize branch name
+            # Remove non-alphanumeric/spaces, replace spaces with hyphens, limit length
+            clean_name = re.sub(r'[^a-zA-Z0-9\s-]', '', task).strip().lower()
+            clean_name = re.sub(r'[\s-]+', '-', clean_name)
+            branch_name = f"adk/{clean_name[:40].strip('-')}"
+            
+            console.print(f"\n[dim]🔧 Setting up git branch: {branch_name}...[/dim]")
+            
+            # Check if branch already exists
+            check_branch = subprocess.run(
+                ["git", "show-ref", "--verify", f"refs/heads/{branch_name}"],
+                cwd=str(workspace_root),
+                capture_output=True,
+            )
+            
+            if check_branch.returncode == 0:
+                # Branch exists, switch to it
+                subprocess.run(
+                    ["git", "checkout", branch_name],
+                    cwd=str(workspace_root),
+                    check=True,
+                    capture_output=True
+                )
+                console.print(f"  [green]✓ Switched to existing branch: {branch_name}[/green]")
+            else:
+                # Create and switch to it
+                subprocess.run(
+                    ["git", "checkout", "-b", branch_name],
+                    cwd=str(workspace_root),
+                    check=True,
+                    capture_output=True
+                )
+                console.print(f"  [green]✓ Created and checked out new branch: {branch_name}[/green]")
+                
+            return branch_name
+        except Exception as e:
+            console.print(f"  [yellow]⚠ Failed to setup git branch: {e}. Running on current branch instead.[/yellow]")
+            return None
+
     async def run(self, task: str) -> PipelineState:
         """Execute the full DAG pipeline for a given task."""
         self.state = PipelineState(task_description=task)
+        workspace_root = Path(__file__).resolve().parent.parent.parent
+
+        # Setup git branch for this task
+        self._setup_git_branch(task, workspace_root)
 
         console.print(Panel(
             f"[bold]ZenGate ADK Pipeline[/bold]\n\nTask: {task}",
@@ -182,15 +251,102 @@ class Pipeline:
             arch_result = await self._run_with_retry("architect", task, {})
             if arch_result.status == TaskStatus.FAILED:
                 return self._finalize("Architect failed")
+                
+            # Write specification doc to docs
+            specs_dir = workspace_root / "docs" / "specs"
+            specs_dir.mkdir(parents=True, exist_ok=True)
+            spec_file = specs_dir / f"architect_spec_{int(time.time())}.md"
+            spec_file.write_text(arch_result.output, encoding="utf-8")
+            console.print(f"  [green]✓ Saved Architect spec to {spec_file.relative_to(workspace_root)}[/green]")
 
             # Stage 2: CodeGen
             self.state.current_stage = "codegen"
             codegen_context = {"architecture": arch_result.output}
-            codegen_result = await self._run_with_retry(
-                "codegen", task, codegen_context
-            )
-            if codegen_result.status == TaskStatus.FAILED:
-                return self._finalize("CodeGen failed")
+
+            # Track all dirs ever written by CodeGen so we can clean them on retry
+            all_generated_dirs: set[Path] = set()
+
+            # Subprocess test loop for CodeGen
+            for codegen_attempt in range(self.config.max_retries):
+                # Clean up ALL previously generated files before this attempt so
+                # stale/broken code from prior retries doesn't pollute go test ./...
+                for stale_dir in all_generated_dirs:
+                    if stale_dir.exists():
+                        import shutil
+                        shutil.rmtree(stale_dir, ignore_errors=True)
+                        console.print(f"  [dim]↩ Cleaned up previous output: {stale_dir.relative_to(workspace_root)}[/dim]")
+
+                codegen_result = await self._run_with_retry(
+                    "codegen", task, codegen_context
+                )
+                if codegen_result.status == TaskStatus.FAILED:
+                    return self._finalize("CodeGen failed")
+
+                # Write files to disk and record which top-level dirs were touched
+                written_files = parse_and_write_files(codegen_result.output, workspace_root)
+                if written_files:
+                    console.print(f"  [green]✓ CodeGen wrote files: {', '.join(written_files)}[/green]")
+                    codegen_result.files_created = written_files
+                    # Collect the unique package dirs for targeted testing & cleanup
+                    for f in written_files:
+                        pkg_dir = Path(f).parent
+                        if pkg_dir != Path(".") and str(pkg_dir) != "":
+                            all_generated_dirs.add(workspace_root / pkg_dir)
+                else:
+                    console.print("  [yellow]⚠ CodeGen output did not contain any [FILE: path] blocks to write![/yellow]")
+
+                # Derive go package paths to test (e.g. "./internal/ratelimiter/...") 
+                # so we only validate what CodeGen produced, not the whole repo.
+                if written_files:
+                    pkg_dirs = set()
+                    for f in written_files:
+                        pkg_dir = Path(f).parent
+                        if pkg_dir != Path(".") and str(pkg_dir) != "":
+                            pkg_dirs.add(str(pkg_dir).replace("\\", "/"))
+                        else:
+                            pkg_dirs.add(".")
+                    test_patterns = [f"./{d}/..." if d != "." else "./..." for d in pkg_dirs]
+                else:
+                    test_patterns = ["./..."]
+
+                # Run Go Tests (Real compilation & test validation)
+                console.print("\n[bold blue]🧪 Running Go Tests to verify CodeGen output...[/bold blue]")
+                console.print(f"  [dim]Packages: {' '.join(test_patterns)}[/dim]")
+                try:
+                    # Sync go.mod/go.sum with any new imports CodeGen may have added
+                    subprocess.run(
+                        ["go", "mod", "tidy"],
+                        cwd=str(workspace_root),
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    test_proc = subprocess.run(
+                        ["go", "test", "-cover"] + test_patterns,
+                        cwd=str(workspace_root),
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    test_success = test_proc.returncode == 0
+                    test_output = test_proc.stdout + "\n" + test_proc.stderr
+
+                    if test_success:
+                        console.print("  [green]✓ All tests passed successfully![/green]")
+                        break
+                    else:
+                        console.print(f"  [red]✗ Go tests failed (attempt {codegen_attempt + 1}/{self.config.max_retries})[/red]")
+                        console.print("[dim]" + test_output + "[/dim]")
+                        codegen_context["review_feedback"] = (
+                            f"Go test command failed with exit code {test_proc.returncode}.\n"
+                            f"Test Logs:\n{test_output}\n"
+                            "Please inspect the failure and fix the generated Go files and unit tests accordingly."
+                        )
+                except Exception as e:
+                    console.print(f"  [red]⚠ Failed to execute go test command: {e}[/red]")
+                    break
+            else:
+                return self._finalize("CodeGen failed to pass Go tests after retries")
 
             # Stage 3: Reviewer (with reject → CodeGen loop)
             self.state.current_stage = "reviewer"
@@ -200,8 +356,9 @@ class Pipeline:
             }
 
             for review_iteration in range(self.config.max_retries):
-                review_result = await execute_agent("reviewer", task, review_context)
-                self.state.add_result(review_result)
+                review_result = await self._run_with_retry(
+                    "reviewer", task, review_context
+                )
 
                 if review_result.status == TaskStatus.COMPLETED:
                     # Check if approved or rejected
@@ -212,9 +369,40 @@ class Pipeline:
                         )
                         # Re-run CodeGen with feedback
                         codegen_context["review_feedback"] = review_result.output
-                        codegen_result = await self._run_with_retry(
-                            "codegen", task, codegen_context
-                        )
+                        
+                        # Re-run CodeGen & test loop
+                        for codegen_attempt in range(self.config.max_retries):
+                            codegen_result = await self._run_with_retry(
+                                "codegen", task, codegen_context
+                            )
+                            written_files = parse_and_write_files(codegen_result.output, workspace_root)
+                            if written_files:
+                                console.print(f"  [green]✓ CodeGen wrote files: {', '.join(written_files)}[/green]")
+                            
+                            try:
+                                subprocess.run(
+                                    ["go", "mod", "tidy"],
+                                    cwd=str(workspace_root),
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=60,
+                                )
+                                test_proc = subprocess.run(
+                                    ["go", "test", "-cover", "./..."],
+                                    cwd=str(workspace_root),
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=60,
+                                )
+                                if test_proc.returncode == 0:
+                                    break
+                                else:
+                                    codegen_context["review_feedback"] = (
+                                        f"Go tests failed:\n{test_proc.stdout}\n{test_proc.stderr}"
+                                    )
+                            except Exception:
+                                break
+                                
                         review_context["code"] = codegen_result.output
                         continue
                     else:
@@ -224,7 +412,28 @@ class Pipeline:
 
             # Stage 4: Tester
             self.state.current_stage = "tester"
-            test_result = await self._run_with_retry("tester", task, {})
+            test_output = ""
+            try:
+                subprocess.run(
+                    ["go", "mod", "tidy"],
+                    cwd=str(workspace_root),
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                test_proc = subprocess.run(
+                    ["go", "test", "-cover", "./..."],
+                    cwd=str(workspace_root),
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                test_output = test_proc.stdout + "\n" + test_proc.stderr
+            except Exception as e:
+                test_output = f"Error running tests: {e}"
+                
+            test_context = {"test_run_logs": test_output}
+            test_result = await self._run_with_retry("tester", task, test_context)
             if test_result.status == TaskStatus.FAILED:
                 return self._finalize("Tester failed")
 
@@ -235,6 +444,12 @@ class Pipeline:
                 "code": codegen_result.output,
             }
             doc_result = await self._run_with_retry("docwriter", task, doc_context)
+            
+            # Parse and write DocWriter outputs (e.g. README.md modifications or docs)
+            written_docs = parse_and_write_files(doc_result.output, workspace_root)
+            if written_docs:
+                console.print(f"  [green]✓ DocWriter wrote files: {', '.join(written_docs)}[/green]")
+                doc_result.files_created = written_docs
 
             # Human-in-the-loop (optional)
             if self.config.human_in_the_loop:
@@ -276,6 +491,7 @@ class Pipeline:
         """Finalize the pipeline and print summary."""
         self.state.completed_at = time.time()
         total_time = self.state.completed_at - self.state.started_at
+        workspace_root = Path(__file__).resolve().parent.parent.parent
 
         # Print summary table
         table = Table(title="Pipeline Summary")
@@ -302,6 +518,60 @@ class Pipeline:
         state_file = state_dir / f"pipeline_{int(self.state.started_at)}.json"
         state_file.write_text(self.state.to_json())
         console.print(f"  State saved to: {state_file}")
+
+        # Git Commit on Success
+        if message == "Pipeline completed successfully":
+            try:
+                # Stage all changes
+                subprocess.run(
+                    ["git", "add", "."],
+                    cwd=str(workspace_root),
+                    check=True,
+                    capture_output=True
+                )
+                
+                # Check current branch name
+                branch_proc = subprocess.run(
+                    ["git", "branch", "--show-current"],
+                    cwd=str(workspace_root),
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                current_branch = branch_proc.stdout.strip()
+                
+                # Commit changes
+                commit_msg = f"feat(adk): {self.state.task_description}"
+                if "\n" in commit_msg:
+                    commit_msg = commit_msg.split("\n")[0]
+                
+                subprocess.run(
+                    ["git", "commit", "-m", commit_msg],
+                    cwd=str(workspace_root),
+                    check=True,
+                    capture_output=True
+                )
+                
+                # Push branch to remote
+                console.print(f"  [dim]Pushing branch {current_branch} to origin remote...[/dim]")
+                subprocess.run(
+                    ["git", "push", "-u", "origin", current_branch],
+                    cwd=str(workspace_root),
+                    check=True,
+                    capture_output=True
+                )
+                
+                console.print(Panel(
+                    f"[green]✓ Changes successfully committed and pushed to remote branch: [bold]{current_branch}[/bold][/green]\n\n"
+                    f"Create and merge a PR on GitHub at:\n"
+                    f"  [bold]https://github.com/prakharxagrawal/AIZenGate/compare/{current_branch}[/bold]\n\n"
+                    f"Once merged on GitHub, pull the changes locally with:\n"
+                    f"  [bold]git checkout master && git pull origin master[/bold]",
+                    title="Git Push Automation",
+                    border_style="green",
+                ))
+            except Exception as e:
+                console.print(f"  [yellow]⚠ Failed to auto-commit or push changes: {e}[/yellow]")
 
         return self.state
 
