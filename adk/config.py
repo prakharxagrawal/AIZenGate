@@ -81,10 +81,10 @@ def get_primary_llm() -> LLMConfig:
 
 
 def get_fallback_llm() -> LLMConfig:
-    """Gemma 4 31B Instruct — verified working via Gemini API, has thinking."""
+    """Gemini 3.1 Flash Lite — cost-efficient, fast low-latency model."""
     return LLMConfig(
-        name="Gemma 4 31B Instruct",
-        model_id="gemma-4-31b-it",
+        name="Gemini 3.1 Flash Lite",
+        model_id="gemini-3.1-flash-lite",
         api_key=os.getenv("GEMINI_API_KEY", ""),
         max_tokens=8192,
         temperature=0.2,
@@ -152,7 +152,7 @@ def get_adk_model(preference: str = "primary"):
         return Gemini(model=fallback.model_id)
     
     # Fallback to default Gemini if no credentials but we run anyway
-    return Gemini(model="gemini-2.0-flash")
+    return Gemini(model="gemini-3.1-flash-lite")
 
 
 # --- Agent Definitions ---

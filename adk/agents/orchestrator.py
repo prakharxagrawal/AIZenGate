@@ -263,18 +263,33 @@ class Pipeline:
             self.state.current_stage = "codegen"
             codegen_context = {"architecture": arch_result.output}
 
-            # Track all dirs ever written by CodeGen so we can clean them on retry
-            all_generated_dirs: set[Path] = set()
+            # Track all files ever written by CodeGen so we can clean them on retry
+            all_written_files: set[Path] = set()
 
             # Subprocess test loop for CodeGen
             for codegen_attempt in range(self.config.max_retries):
                 # Clean up ALL previously generated files before this attempt so
                 # stale/broken code from prior retries doesn't pollute go test ./...
-                for stale_dir in all_generated_dirs:
-                    if stale_dir.exists():
-                        import shutil
-                        shutil.rmtree(stale_dir, ignore_errors=True)
-                        console.print(f"  [dim]↩ Cleaned up previous output: {stale_dir.relative_to(workspace_root)}[/dim]")
+                for stale_file in all_written_files:
+                    if stale_file.exists():
+                        # If the file exists, check if it is tracked by git
+                        check_git = subprocess.run(
+                            ["git", "ls-files", "--error-unmatch", str(stale_file)],
+                            cwd=str(workspace_root),
+                            capture_output=True
+                        )
+                        if check_git.returncode == 0:
+                            # Revert changes to existing file
+                            subprocess.run(
+                                ["git", "checkout", "--", str(stale_file)],
+                                cwd=str(workspace_root),
+                                capture_output=True
+                            )
+                            console.print(f"  [dim]↩ Reverted modified file: {stale_file.relative_to(workspace_root)}[/dim]")
+                        else:
+                            # Delete new file
+                            stale_file.unlink()
+                            console.print(f"  [dim]↩ Deleted new file: {stale_file.relative_to(workspace_root)}[/dim]")
 
                 codegen_result = await self._run_with_retry(
                     "codegen", task, codegen_context
@@ -282,16 +297,13 @@ class Pipeline:
                 if codegen_result.status == TaskStatus.FAILED:
                     return self._finalize("CodeGen failed")
 
-                # Write files to disk and record which top-level dirs were touched
+                # Write files to disk and record which files were touched
                 written_files = parse_and_write_files(codegen_result.output, workspace_root)
                 if written_files:
                     console.print(f"  [green]✓ CodeGen wrote files: {', '.join(written_files)}[/green]")
                     codegen_result.files_created = written_files
-                    # Collect the unique package dirs for targeted testing & cleanup
                     for f in written_files:
-                        pkg_dir = Path(f).parent
-                        if pkg_dir != Path(".") and str(pkg_dir) != "":
-                            all_generated_dirs.add(workspace_root / pkg_dir)
+                        all_written_files.add(workspace_root / f)
                 else:
                     console.print("  [yellow]⚠ CodeGen output did not contain any [FILE: path] blocks to write![/yellow]")
 

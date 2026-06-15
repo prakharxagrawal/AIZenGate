@@ -51,9 +51,12 @@ func main() {
 	}
 	defer cpClient.Close()
 
-	// Start configuration watcher (handles hot reloads)
-	if err := cpClient.Start(context.Background()); err != nil {
-		slog.Warn("failed to connect to etcd cluster, dynamic configuration disabled (will use baseline fallbacks)", "endpoints", cfg.EtcdEndpoints, "error", err)
+	// Start configuration watcher (handles hot reloads) with a 3-second timeout context
+	startCtx, startCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	startErr := cpClient.Start(startCtx)
+	startCancel()
+	if startErr != nil {
+		slog.Warn("failed to connect to etcd cluster, dynamic configuration disabled (will use baseline fallbacks)", "endpoints", cfg.EtcdEndpoints, "error", startErr)
 	}
 
 	// Initialize rate limiter (Redis sliding-window with in-memory Token Bucket fallback)
