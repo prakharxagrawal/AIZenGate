@@ -1,100 +1,72 @@
 package auth
 
 import (
-	"encoding/json"
+	"context"
+	"log/slog"
 	"net/http"
+	"net/http.TestServer"
 	"net/http/httptest"
 	"testing"
 )
 
-func TestJWTMiddleware_ValidToken(t *testing.T) {
-	m := NewJWTMiddleware("test-secret-key")
-
-	// Generate a valid mock token
-	token, err := m.GenerateMockToken("client_123", "premium")
-	if err != nil {
-		t.Fatalf("failed to generate token: %v", err)
-	}
-
-	// Create request with Bearer token
-	req := httptest.NewRequest(http.MethodGet, "/anything", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	rr := httptest.NewRecorder()
-
-	// Handler assertion check
-	handler := m.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		clientID := r.Context().Value(ClientIDCtxKey).(string)
-		tier := r.Context().Value(ClientTierCtxKey).(string)
-
-		if clientID != "client_123" {
-			t.Errorf("expected clientID 'client_123', got %q", clientID)
-		}
-		if tier != "premium" {
-			t.Errorf("expected tier 'premium', got %q", tier)
-		}
-
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", rr.Code)
-	}
+type mockValidator struct {
+	shouldFail bool
+	identity   *UserIdentity
 }
 
-func TestJWTMiddleware_AnonymousFallback(t *testing.T) {
-	m := NewJWTMiddleware("test-secret-key")
-
-	req := httptest.NewRequest(http.MethodGet, "/anything", nil)
-	rr := httptest.NewRecorder()
-
-	handler := m.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		clientID := r.Context().Value(ClientIDCtxKey).(string)
-		tier := r.Context().Value(ClientTierCtxKey).(string)
-
-		if clientID != "anonymous" {
-			t.Errorf("expected clientID 'anonymous', got %q", clientID)
-		}
-		if tier != "anonymous" {
-			t.Errorf("expected tier 'anonymous', got %q", tier)
-		}
-
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", rr.Code)
+func (m *mockValidator) Validate(ctx context.Context, token string) (*UserIdentity, error) {
+	if m.shouldFail {
+		return nil, ErrInvalidToken
 	}
+	return m.identity, nil
 }
 
-func TestJWTMiddleware_InvalidToken(t *testing.T) {
-	m := NewJWTMiddleware("test-secret-key")
+func TestAuthMiddleware(t *testing.T) {
+	logger := slog.Default()
+	identity := &UserIdentity{UserID: "user-123", TenantID: "tenant-abc"}
+	validator := &mockValidator{identity: identity}
+	mw := NewAuthMiddleware(validator, logger)
 
-	req := httptest.NewRequest(http.MethodGet, "/anything", nil)
-	req.Header.Set("Authorization", "Bearer invalid-token-string")
+	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify downstream propagation
+		if r.Header.Get("Authorization") != "" {
+			t.Error("Authorization header should have been stripped")
+		}
+		if r.Header.Get("X-User-ID") != "user-123" {
+			t.Errorf("Expected X-User-ID user-123, got %s", r.Header.Get("X-User-ID"))
+		}
+		if _, ok := GetIdentity(r.Context()); !ok {
+			t.Error("UserIdentity missing from context")
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 
-	rr := httptest.NewRecorder()
-
-	handler := m.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("handler should not have been called")
-	}))
-
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("expected status 401, got %d", rr.Code)
+	tests := []struct {
+		name           string
+		authHeader     string
+		validatorFail  bool
+		expectedStatus int
+	}{
+		{"Missing Header", "", false, http.StatusUnauthorized},
+		{"Malformed Header", "Basic 123", false, http.StatusUnauthorized},
+		{"Invalid Token", "Bearer invalid-token", true, http.StatusUnauthorized},
+		{"Valid Token", "Bearer valid-token", false, http.StatusOK},
 	}
 
-	var resp map[string]string
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			validator.shouldFail = tt.validatorFail
+			req := httptest.NewRequest("GET", "/", nil)
+			if tt.authHeader != "" {
+				req.Header.Set("Authorization", tt.authHeader)
+			}
+			
+			rr := httptest.NewRecorder()
+			mw(nextHandler).ServeHTTP(rr, req)
 
-	if resp["error"] != "invalid_token" {
-		t.Errorf("expected error code 'invalid_token', got %q", resp["error"])
+			if rr.Code != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d", tt.expectedStatus, rr.Code)
+			}
+		})
 	}
 }
