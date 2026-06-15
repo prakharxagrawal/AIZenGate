@@ -2,18 +2,26 @@
 ZenGate ADK Configuration
 
 LLM Fallback Chain:
-  1. DeepSeek V4 Flash Free (primary — free, 200K context)
-  2. Gemini API Free Tier (fallback — permanent free, 1500 req/day)
+  1. Gemma 4 31B Instruct (primary — via Gemini API, free tier, thinking model)
 
 All agent configurations and tool definitions are centralized here.
 """
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
+from dotenv import load_dotenv
 
 from google.adk.models import Gemini
 from google.adk.models.lite_llm import LiteLlm
+
+# Load .env file from the workspace root (parent of adk/)
+env_path = Path(__file__).resolve().parent.parent / ".env"
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path)
+else:
+    load_dotenv()
 
 
 @dataclass
@@ -45,6 +53,21 @@ class AgentConfig:
 
 # --- LLM Providers ---
 
+def get_custom_llm() -> Optional[LLMConfig]:
+    """Custom LLM provider (e.g., Ollama, OpenRouter, Groq, local models)."""
+    model_id = os.getenv("ADK_LLM_MODEL_ID", "")
+    if not model_id:
+        return None
+    return LLMConfig(
+        name="Custom LLM Provider",
+        model_id=model_id,
+        api_key=os.getenv("ADK_LLM_API_KEY") or "dummy",
+        base_url=os.getenv("ADK_LLM_BASE_URL", None),
+        max_tokens=int(os.getenv("ADK_LLM_MAX_TOKENS", "8192")),
+        temperature=float(os.getenv("ADK_LLM_TEMPERATURE", "0.2")),
+    )
+
+
 def get_primary_llm() -> LLMConfig:
     """DeepSeek V4 Flash Free — primary LLM for all agents."""
     return LLMConfig(
@@ -58,19 +81,24 @@ def get_primary_llm() -> LLMConfig:
 
 
 def get_fallback_llm() -> LLMConfig:
-    """Gemini API Free Tier — fallback LLM for reliability."""
+    """Gemini 3.1 Flash Lite — cost-efficient, fast low-latency model."""
     return LLMConfig(
-        name="Gemini Free Tier",
-        model_id="gemini-2.0-flash",
+        name="Gemini 3.1 Flash Lite",
+        model_id="gemini-3.1-flash-lite",
         api_key=os.getenv("GEMINI_API_KEY", ""),
         max_tokens=8192,
-        temperature=0.3,
+        temperature=0.2,
     )
 
 
 def get_llm_chain() -> list[LLMConfig]:
-    """Returns the LLM fallback chain: primary → fallback."""
+    """Returns the LLM fallback chain: custom/primary → fallback."""
     chain = []
+    
+    custom = get_custom_llm()
+    if custom and custom.is_available:
+        chain.append(custom)
+
     primary = get_primary_llm()
     if primary.is_available:
         chain.append(primary)
@@ -81,7 +109,7 @@ def get_llm_chain() -> list[LLMConfig]:
 
     if not chain:
         raise RuntimeError(
-            "No LLM available. Set DEEPSEEK_API_KEY or GEMINI_API_KEY environment variable."
+            "No LLM available. Set ADK_LLM_MODEL_ID, DEEPSEEK_API_KEY, or GEMINI_API_KEY environment variable."
         )
 
     return chain
@@ -89,6 +117,20 @@ def get_llm_chain() -> list[LLMConfig]:
 
 def get_adk_model(preference: str = "primary"):
     """Returns the Google ADK model object based on credentials and preferences."""
+    custom = get_custom_llm()
+    if custom and custom.is_available:
+        # LiteLlm requires provider/model format or we default to openai/
+        model_id = custom.model_id
+        if "/" not in model_id:
+            model_id = f"openai/{model_id}"
+        return LiteLlm(
+            model=model_id,
+            base_url=custom.base_url,
+            api_key=custom.api_key,
+            temperature=custom.temperature,
+            max_tokens=custom.max_tokens,
+        )
+
     primary = get_primary_llm()
     fallback = get_fallback_llm()
 
@@ -110,7 +152,7 @@ def get_adk_model(preference: str = "primary"):
         return Gemini(model=fallback.model_id)
     
     # Fallback to default Gemini if no credentials but we run anyway
-    return Gemini(model="gemini-2.0-flash")
+    return Gemini(model="gemini-3.1-flash-lite")
 
 
 # --- Agent Definitions ---
@@ -143,15 +185,24 @@ Your responsibilities:
 1. Read architecture documents and generate production-grade Go code
 2. Follow Go best practices: effective Go, standard library first
 3. Write idiomatic error handling with wrapped errors
-4. Generate comprehensive test files alongside implementation
-5. Use structured logging (log/slog) throughout
+4. Use structured logging (log/slog) throughout
 
 Rules:
 - ALWAYS include package documentation
 - ALWAYS handle errors explicitly (no _ = err)
 - Use interfaces for testability
 - Keep functions under 50 lines
-- Write table-driven tests
+- For Redis operations, ALWAYS import and use "github.com/redis/go-redis/v9" (DO NOT use "github.com/go-redis/redis/v9")
+
+You may generate or modify multiple files if required by the architecture specification.
+Output each file using this exact format:
+
+[FILE: path/to/file.go]
+```go
+// code here
+```
+
+Make sure to include a separate [FILE: ...] block for each file you want to create or edit. Stop immediately after the final closing ```.
 """,
         tools=["read_file", "write_file", "run_command"],
     ),
@@ -208,6 +259,14 @@ Style:
 - Include runnable code examples
 - Add mermaid diagrams for architecture
 - Use badges (build status, coverage, license)
+
+IMPORTANT Output Format:
+If you want to update or write files (like README.md or API docs), you MUST output it using this format:
+
+[FILE: path/to/file]
+```markdown
+# contents here
+```
 """,
         tools=["read_file", "write_file", "search_codebase"],
     ),
@@ -237,15 +296,23 @@ def get_pipeline_config() -> PipelineConfig:
 
 
 async def run_agent_async(agent_name: str, prompt: str, context: Optional[dict] = None) -> str:
-    """Executes a single ADK agent query asynchronously."""
+    """Executes a single agent query via direct Gemini API call.
+
+    Bypasses the ADK Runner to avoid session-state overhead that causes
+    Gemma 4 31B (thinking model) to hit server-side 500 timeouts.
+    """
     import json
     import os
     import asyncio
 
     # Check if we have credentials
-    has_credentials = bool(os.getenv("DEEPSEEK_API_KEY") or os.getenv("GEMINI_API_KEY"))
+    has_credentials = bool(
+        os.getenv("DEEPSEEK_API_KEY") or
+        os.getenv("GEMINI_API_KEY") or
+        os.getenv("ADK_LLM_MODEL_ID")
+    )
     if not has_credentials:
-        await asyncio.sleep(0.5) # simulate minor network latency
+        await asyncio.sleep(0.5)
         if agent_name == "architect":
             return """# Architecture: Sliding Window Rate Limiter
 ## Overview
@@ -289,50 +356,45 @@ Enforces API rate limits.
         else:
             return f"[Mock] {agent_name} agent executed prompt successfully."
 
-    from google.adk import Agent, Runner
-    from google.adk.sessions import InMemorySessionService
-    from google.genai import types
-
     agent_config = AGENTS.get(agent_name)
     if not agent_config:
         raise ValueError(f"Unknown agent: {agent_name}")
 
-    # Build the system instruction from system prompt and optional context
-    instruction = agent_config.system_prompt
+    # Build the full user prompt
+    user_prompt = prompt
     if context:
-        instruction += "\n\nContext:\n" + json.dumps(context, indent=2)
+        user_prompt += "\n\nContext:\n" + json.dumps(context, indent=2)
 
-    # Initialize the ADK model connection
-    model_obj = get_adk_model(agent_config.llm_preference)
+    # Resolve which LLM to use (custom > fallback)
+    llm_config = get_fallback_llm()
+    custom = get_custom_llm()
+    if custom and custom.is_available:
+        llm_config = custom
 
-    # Construct the agent
-    agent = Agent(
-        name=agent_config.name,
-        model=model_obj,
-        instruction=instruction,
-    )
+    import google.genai as genai
+    from google.genai import types as gentypes
 
-    # Setup runner and session
-    session_service = InMemorySessionService()
-    runner = Runner(
-        agent=agent,
-        app_name="zengate_adk",
-        session_service=session_service,
-        auto_create_session=True
-    )
+    api_key = llm_config.api_key or os.getenv("GEMINI_API_KEY", "")
+    client = genai.Client(api_key=api_key)
 
-    # Execute the request
-    content = types.Content(role="user", parts=[types.Part(text=prompt)])
-    response_text = ""
+    # 5-minute timeout — Gemma 4 31B uses chain-of-thought before answering
+    AGENT_TIMEOUT_SECONDS = 300
 
-    async for event in runner.run_async(
-        user_id="dev_user",
-        session_id="dev_session",
-        new_message=content
-    ):
-        if event.is_final_response() and event.content:
-            parts = event.content.parts
-            if parts:
-                response_text = "".join([p.text for p in parts if p.text])
+    async def _call_api() -> str:
+        response = await client.aio.models.generate_content(
+            model=llm_config.model_id,
+            contents=user_prompt,
+            config=gentypes.GenerateContentConfig(
+                system_instruction=agent_config.system_prompt,
+                temperature=llm_config.temperature,
+                max_output_tokens=llm_config.max_tokens,
+            ),
+        )
+        parts = response.candidates[0].content.parts if response.candidates else []
+        # Filter out internal thinking/reasoning parts — return only final answer
+        return "".join(
+            p.text for p in parts
+            if p.text and not getattr(p, "thought", False)
+        )
 
-    return response_text
+    return await asyncio.wait_for(_call_api(), timeout=AGENT_TIMEOUT_SECONDS)

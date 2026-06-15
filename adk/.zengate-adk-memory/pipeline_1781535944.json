@@ -1,0 +1,253 @@
+{
+  "task": "The self-healer fails to query the Gemini API because the Go brain package is using the gemini-2.5-flash model, which has no quota on the free tier. Fix this by targeting a free tier model which adk itself uses for Code development.",
+  "current_stage": "docwriter",
+  "iteration": 0,
+  "results": [
+    {
+      "agent": "architect",
+      "status": "failed",
+      "duration": 2.3581717014312744,
+      "retries": 1
+    },
+    {
+      "agent": "architect",
+      "status": "completed",
+      "duration": 46.637367248535156,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 74.48381543159485,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 78.88191270828247,
+      "retries": 0
+    },
+    {
+      "agent": "reviewer",
+      "status": "completed",
+      "duration": 47.65572381019592,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 91.05359482765198,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 66.46473503112793,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "failed",
+      "duration": 23.377300024032593,
+      "retries": 1
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 97.15388631820679,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "failed",
+      "duration": 28.71936535835266,
+      "retries": 1
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 62.86115479469299,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 93.46782231330872,
+      "retries": 0
+    },
+    {
+      "agent": "reviewer",
+      "status": "completed",
+      "duration": 59.09329009056091,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 88.82248616218567,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 100.0725646018982,
+      "retries": 0
+    },
+    {
+      "agent": "reviewer",
+      "status": "completed",
+      "duration": 84.57743191719055,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 88.121084690094,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 71.72474384307861,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "failed",
+      "duration": 32.43672204017639,
+      "retries": 1
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 67.5973174571991,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "failed",
+      "duration": 24.19226908683777,
+      "retries": 1
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 74.6531970500946,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 70.05110478401184,
+      "retries": 0
+    },
+    {
+      "agent": "reviewer",
+      "status": "completed",
+      "duration": 61.59685778617859,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 70.74731492996216,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 73.99818253517151,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 62.30506467819214,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "failed",
+      "duration": 35.39505863189697,
+      "retries": 1
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 66.2027497291565,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "failed",
+      "duration": 26.891185760498047,
+      "retries": 1
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 75.82770037651062,
+      "retries": 0
+    },
+    {
+      "agent": "reviewer",
+      "status": "completed",
+      "duration": 48.285542488098145,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 72.70561122894287,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 65.34614396095276,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 67.55738735198975,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "failed",
+      "duration": 10.703782558441162,
+      "retries": 1
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 70.1931140422821,
+      "retries": 0
+    },
+    {
+      "agent": "codegen",
+      "status": "completed",
+      "duration": 72.02074241638184,
+      "retries": 0
+    },
+    {
+      "agent": "tester",
+      "status": "failed",
+      "duration": 2.764038562774658,
+      "retries": 1
+    },
+    {
+      "agent": "tester",
+      "status": "completed",
+      "duration": 26.141353607177734,
+      "retries": 0
+    },
+    {
+      "agent": "docwriter",
+      "status": "completed",
+      "duration": 70.03302025794983,
+      "retries": 0
+    }
+  ]
+}
